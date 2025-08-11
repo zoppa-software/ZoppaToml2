@@ -794,29 +794,6 @@ Namespace Toml
             Return False
         End Function
 
-        '''' <summary>
-        '''' 複数行基本文字列の中で、ダブルコーテーションが連続しているかをチェックします。
-        '''' 連続している場合は、複数行基本文字列の内容として認識されます。
-        '''' </summary>
-        '''' <param name="iter">U8Stringのイテレータ。</param>
-        '''' <returns>ダブルコーテーションが連続している場合は真。</returns>
-        'Private Function MatchMlbQuotes(iter As U8String.U8StringIterator) As Boolean
-        '    Dim startIndex = iter.CurrentIndex
-
-        '    ' 複数行基本文字列の中でダブルコーテーションが連続しているかをチェック
-        '    If EqualCharByte(iter.Current, &H22) Then ' "
-        '        iter.MoveNext()
-        '        If EqualCharByte(iter.Current, &H22) Then ' "
-        '            iter.MoveNext()
-        '        End If
-        '        Return True
-        '    End If
-
-        '    ' ダブルコーテーションが連続していない場合はイテレータの位置を元に戻す
-        '    iter.SetCurrentIndex(startIndex)
-        '    Return False
-        'End Function
-
         ''' <summary>
         ''' 文字列のエスケープされていない文字をチェックします。
         ''' 基本文字列や複数行基本文字列の中で使用される文字がエスケープされていないかを確認します。
