@@ -948,4 +948,32 @@ odt3 = 1979-05-27T00:32:00.999999-07:00")
         Assert.Equal(New DateTimeOffset(1979, 5, 27, 0, 32, 0, TimeSpan.FromHours(-7)), doc2.GetExpression("odt2").ValueTo(Of DateTimeOffset))
         Assert.Equal(New DateTimeOffset(1979, 5, 27, 0, 32, 0, 999, TimeSpan.FromHours(-7)), doc2.GetExpression("odt3").ValueTo(Of DateTimeOffset))
     End Sub
+
+    <Fact>
+    Sub InlineTableArray1Test()
+        Dim src1 = U8String.NewString("inline_table_array = [ { x = 1, y = 2 }, { x = 3, y = 4 } ]")
+        ' ドキュメント解析を実行
+        Dim doc1 = TomlDocument.Read(src1)
+        Dim ita = doc1.GetNode("inline_table_array")
+        Assert.Equal(2, ita.Count)
+        Assert.Equal(1, ita(0).GetExpression("x").ValueTo(Of Integer))
+        Assert.Equal(2, ita(0).GetExpression("y").ValueTo(Of Integer))
+        Assert.Equal(3, ita(1).GetExpression("x").ValueTo(Of Integer))
+        Assert.Equal(4, ita(1).GetExpression("y").ValueTo(Of Integer))
+
+        Dim src2 = U8String.NewString("inline_inline_table = { a = { x = 1, y = 2 }, b = { x = 3, y = 4 }, c = { x = 5, y = 6 } }")
+        ' ドキュメント解析を実行
+        Dim doc2 = TomlDocument.Read(src2)
+        Dim iit = doc2.GetNode("inline_inline_table")
+        Assert.True(iit.ContainsKey("a"))
+        Assert.True(iit.ContainsKey("b"))
+        Assert.True(iit.ContainsKey("c"))
+        Assert.Equal(1, iit("a")("x").ValueTo(Of Integer))
+        Assert.Equal(2, iit("a")("y").ValueTo(Of Integer))
+        Assert.Equal(3, iit("b")("x").ValueTo(Of Integer))
+        Assert.Equal(4, iit("b")("y").ValueTo(Of Integer))
+        Assert.Equal(5, iit("c")("x").ValueTo(Of Integer))
+        Assert.Equal(6, iit("c")("y").ValueTo(Of Integer))
+    End Sub
+
 End Class

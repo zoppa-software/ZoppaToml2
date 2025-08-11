@@ -175,7 +175,7 @@ Namespace Toml
 
             ' キーのテーブルを検索、なければ作成し、あればチェックする
             '
-            ' 1. 中間キーのエントリがテーブルで明示的に登録されていなければ、問題なし
+            ' 1. 中間キーのエントリがテーブルならば、問題なし
             ' 2. 中間キーのエントリがインラインテーブルならば、重複例外をスロー
             ' 3. 中間キーのエントリがテーブル配列で明示的に登録されていなければ、問題なし（最新位置のテーブル取得）
             ' 4. 末端キーのエントリがテーブル配列ならば新しいテーブルを追加
@@ -189,9 +189,6 @@ Namespace Toml
                     If index < keys.Count - 1 Then
                         Select Case tblNode.NodeType
                             Case TomlNodeType.Table ' 1
-                                If Me.IsDescribed Then
-                                    Throw New TomlTableDuplicationException($"テーブル'{curKey}' はすでに存在します。")
-                                End If
                                 Return CType(tblNode, TomlNode).RegisterArrayTable(keys, index + 1)
                             Case TomlNodeType.InlineTable
                                 Throw New TomlTableDuplicationException($"中間キー'{curKey}'はテーブルノードでなければなりません。")

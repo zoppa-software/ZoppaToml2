@@ -1,7 +1,6 @@
 ﻿Option Strict On
 Option Explicit On
 
-Imports System.CodeDom.Compiler
 Imports System.Runtime.CompilerServices
 Imports ZoppaTomlLibrary.Strings
 
@@ -41,17 +40,18 @@ Namespace Toml
                 End If
             End While
 
+            ' 末尾の 0x00 文字を読み捨てる
             While iter.HasNext() AndAlso iter.Current?.Raw0 = 0
                 iter.MoveNext()
             End While
 
-
+            ' 解析が完了した後にまだ文字が残っている場合は、例外をスロー
             If iter.HasNext() Then
-                ' 解析が完了した後にまだ文字が残っている場合は、例外をスロー
                 Throw New TomlParseException("未解析な文字が残っています。", source, iter)
-            Else
-                Return New TomlExpression(TomlExpressionType.Expression, U8String.Empty, expressions.ToArray())
             End If
+
+            ' 解析結果をTomlExpressionとして返す
+            Return New TomlExpression(TomlExpressionType.Expression, U8String.Empty, expressions.ToArray())
         End Function
 
         ''' <summary>
@@ -68,11 +68,13 @@ Namespace Toml
             ' 空白読み捨て
             ParseWs(source, iter)
 
-            ' キー値ペアかテーブルを解析
+            ' キー値ペアが取れたら取得、取れなかったらテーブルを取得
             Dim exper = ParseKeyval(source, iter)
             If exper.Type = TomlExpressionType.None Then
                 exper = ParseTable(source, iter)
             End If
+
+            ' 取得できたら空白を読み捨てる
             If exper.Type <> TomlExpressionType.None Then
                 ParseWs(source, iter)
             End If
@@ -98,12 +100,13 @@ Namespace Toml
             Dim startIndex = iter.CurrentIndex
 
             ' 対象文字であることを確認
+            ' 1. 空白文字（スペースやタブ）を読み捨てる
+            ' 2. 空白文字が来ない場合は終了
             While iter.HasNext()
-                If IsWschar(iter.Current) Then
+                If AnyCharByte(iter.Current, &H20, &H9) Then  ' 1
                     iter.MoveNext()
                 Else
-                    ' 不正な文字が出現した場合は終了
-                    Exit While
+                    Exit While ' 2
                 End If
             End While
 
@@ -115,36 +118,25 @@ Namespace Toml
             End If
         End Function
 
-        ''' <summary>
-        ''' 引数で指定されたU8Stringのイテレータから空白文字を読み捨てます。
-        ''' </summary>
+        ''' <summary>引数で指定されたU8Stringのイテレータから空白文字を読み捨てます。</summary>
         ''' <param name="iter">U8Stringのイテレータ。</param>
         ''' <returns>空白文字が読み捨てられた場合はTrue、それ以外はFalse。</returns>
         Private Function MatchWs(iter As U8String.U8StringIterator) As Boolean
             Dim startIndex = iter.CurrentIndex
 
             ' 対象文字であることを確認
+            ' 1. 空白文字（スペースやタブ）を読み捨てる
+            ' 2. 空白文字が来ない場合は終了
             While iter.HasNext()
-                If IsWschar(iter.Current) Then
+                If AnyCharByte(iter.Current, &H20, &H9) Then  ' 1
                     iter.MoveNext()
                 Else
-                    ' 不正な文字が出現した場合は終了
-                    Exit While
+                    Exit While ' 2
                 End If
             End While
 
             ' 解析結果を返す
             Return iter.CurrentIndex > startIndex
-        End Function
-
-        ''' <summary>空白文字（スペースやタブ）をチェックします。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>空白文字（スペースやタブ）の場合はTrue、それ以外はFalse。</returns>
-        Private Function IsWschar(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                Return (u8c.Value.Raw0 = &H20 OrElse u8c.Value.Raw0 = &H9)
-            End If
-            Return False
         End Function
 
 #End Region
@@ -176,16 +168,6 @@ Namespace Toml
 #End Region
 
 #Region "コメント"
-
-        ''' <summary>引数で指定されたU8Charがコメントの開始記号（#）であるかをチェックします。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>コメント開始記号ならば真。</returns>
-        Private Function IsCommentStartSymbol(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                Return (u8c.Value.Raw0 = &H23)
-            End If
-            Return False
-        End Function
 
         ''' <summary>
         ''' 引数の文字が非ASCII文字であるかをチェックします。
@@ -227,15 +209,18 @@ Namespace Toml
         ''' </remarks>
         Public Function ParseComment(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
             Dim startIndex = iter.CurrentIndex
-            If IsCommentStartSymbol(iter.Current) Then
+
+            If EqualCharByte(iter.Current, &H23) Then ' #
                 iter.MoveNext()
+
+                ' コメントの解析
+                ' 1. 非EOL文字が来る場合はコメントの一部として読み進める
+                ' 2. 改行文字が出現した場合は終了
                 While iter.HasNext()
                     If IsNonEol(iter.Current) Then
-                        ' 非EOL文字が来る場合
-                        iter.MoveNext()
+                        iter.MoveNext() ' 1
                     Else
-                        ' 改行文字が出現した場合は終了
-                        Exit While
+                        Exit While ' 2
                     End If
                 End While
 
@@ -269,7 +254,7 @@ Namespace Toml
             End If
 
             ' キーと値の区切り（=）を取得
-            Dim keyvalSep = ParseKeyvalSep(source, iter)
+            Dim keyvalSep = ParseKeyvalOrDotSep(source, iter, &H3D, TomlExpressionType.KeyvalSep)
             If keyvalSep.Type = TomlExpressionType.None Then
                 iter.SetCurrentIndex(startIndex)
                 Throw New TomlParseException("キーと値の区切りがありません。", source, iter)
@@ -314,7 +299,7 @@ Namespace Toml
 
             Do
                 ' ドット区切りが来た場合は、次のキーを解析
-                Dim dotExpr = ParseDotSep(source, iter)
+                Dim dotExpr = ParseKeyvalOrDotSep(source, iter, &H2E, TomlExpressionType.DotSep)
                 If dotExpr.Type = TomlExpressionType.DotSep Then
                     sKey = ParseSimpleKey(source, iter)
                     If sKey.Type <> TomlExpressionType.None Then
@@ -379,9 +364,8 @@ Namespace Toml
             ' 対象文字であることを確認
             While iter.HasNext()
                 If IsAlpha(iter.Current) OrElse
-                   IsDigit(iter.Current) OrElse
-                   iter.Current.Value.Raw0 = &H2D OrElse
-                   iter.Current.Value.Raw0 = &H5F Then
+                   RangeCharByte(iter.Current, &H30, &H39) OrElse ' 0-9の範囲
+                   AnyCharByte(iter.Current, &H2D, &H5F) Then ' - または _
                     iter.MoveNext()
                 Else
                     ' 不正な文字が出現した場合は終了
@@ -398,25 +382,25 @@ Namespace Toml
             End If
         End Function
 
-        ''' <summary>
-        ''' 引数で指定されたU8Stringから、ドット区切りの式を解析します。
-        ''' ドット区切りは、キーの一部として使用されることがあります。
-        ''' </summary>
+        ''' <summary>引数で指定されたU8Stringから、区切りの式を解析します。</summary>
         ''' <param name="source">解析対象のU8String。</param>
         ''' <param name="iter">U8Stringのイテレータ。</param>
+        ''' <param name="sepByte">区切り文字。</param>
+        ''' <param name="exprType">式のタイプ。</param>
         ''' <returns>解析結果のTomlExpression。</returns>
-        Function ParseDotSep(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
+        Private Function ParseKeyvalOrDotSep(source As U8String, iter As U8String.U8StringIterator, sepByte As Byte, exprType As TomlExpressionType) As TomlExpression
             Dim startIndex = iter.CurrentIndex
 
             ' 空白読み捨て
             ParseWs(source, iter)
 
-            If iter.HasNext() AndAlso iter.Current.Value.Raw0 = &H2E Then
-                ' ドットが来た場合はドットを読み進める
-                iter.MoveNext()
+            ' 区切り文字判定
+            ' 1. 区切り文字が来た場合はを読み進める
+            ' 2. 区切り文字が来ない場合はイテレータの位置を元に戻して空の式を返す
+            If EqualCharByte(iter.Current, sepByte) Then ' .
+                iter.MoveNext() ' 1
             Else
-                ' ドットが来ない場合はイテレータの位置を元に戻して空の式を返す
-                iter.SetCurrentIndex(startIndex)
+                iter.SetCurrentIndex(startIndex)    ' 2
                 Return TomlExpression.Empty
             End If
 
@@ -424,38 +408,8 @@ Namespace Toml
             ParseWs(source, iter)
 
             ' 解析結果をTomlExpressionとして返す
-            Return New TomlExpression(TomlExpressionType.DotSep, U8String.NewSlice(source, startIndex, iter.CurrentIndex - startIndex))
+            Return New TomlExpression(exprType, U8String.NewSlice(source, startIndex, iter.CurrentIndex - startIndex))
         End Function
-
-        ''' <summary>
-        ''' 引数で指定されたU8Stringから、キーと値の区切り（=）を解析します。
-        ''' キーと値の区切りは、ドット区切りの後に続く等号（=）です。
-        ''' </summary>
-        ''' <param name="source">解析対象のU8String。</param>
-        ''' <param name="iter">U8Stringのイテレータ。</param>
-        ''' <returns>解析結果のTomlExpression。</returns>
-        Function ParseKeyvalSep(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
-            Dim startIndex = iter.CurrentIndex
-
-            ' 空白読み捨て
-            ParseWs(source, iter)
-
-            If iter.HasNext() AndAlso iter.Current.Value.Raw0 = &H3D Then
-                ' 等号が来た場合はドットを読み進める
-                iter.MoveNext()
-            Else
-                ' 等号が来ない場合はイテレータの位置を元に戻して空の式を返す
-                iter.SetCurrentIndex(startIndex)
-                Return TomlExpression.Empty
-            End If
-
-            ' 空白読み捨て
-            ParseWs(source, iter)
-
-            ' 解析結果をTomlExpressionとして返す
-            Return New TomlExpression(TomlExpressionType.KeyvalSep, U8String.NewSlice(source, startIndex, iter.CurrentIndex - startIndex))
-        End Function
-
 
         ''' <summary>
         ''' 引数で指定されたU8Stringから、引用符付きのキーを解析します。
@@ -596,7 +550,7 @@ Namespace Toml
         ''' <returns>解析結果のTomlExpression。</returns>
         Function ParseBasicString(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
             Dim startIndex = iter.CurrentIndex
-            If IsQuotationMark(iter.Current) Then
+            If EqualCharByte(iter.Current, &H22) Then ' "
                 iter.MoveNext()
                 While iter.HasNext()
                     ' 基本文字列でなければ終了
@@ -606,7 +560,7 @@ Namespace Toml
                 End While
 
                 ' 解析結果をTomlExpressionとして返す
-                If IsQuotationMark(iter.Current) Then
+                If EqualCharByte(iter.Current, &H22) Then ' "
                     iter.MoveNext()
                     Return New TomlExpression(TomlExpressionType.BasicString, U8String.NewSlice(source, startIndex, iter.CurrentIndex - startIndex))
                 Else
@@ -629,125 +583,33 @@ Namespace Toml
         ''' <param name="iter">U8Stringのイテレータ。</param>
         ''' <returns>文字列。</returns>
         Function ConvertToBasicString(iter As U8String.U8StringIterator) As U8String
-            If IsQuotationMark(iter.Current) Then
+            Dim startIndex = iter.CurrentIndex
+            If EqualCharByte(iter.Current, &H22) Then ' "
                 Dim buf As New List(Of Byte)()
-
                 iter.MoveNext()
 
                 While iter.HasNext()
                     Dim c = iter.MoveNext().Value
 
+                    ' 基本文字列の文字を解析してバイトバッファに追加
+                    ' 1. エスケープシーケンスの文字ならば解析して追加
+                    ' 2. 非エスケープの基本文字ならば追加
+                    ' 3. 基本文字列の終了記号（"）ならば終了
+                    ' 4. 基本文字列の終了記号でない場合は例外をスロー
                     If IsEscapedSeqChar(c, iter.Current) Then
-                        ' エスケープシーケンスを解析
-                        buf.AppendEscapeBytes(iter)
-                    ElseIf c.Raw0 <> &H22 Then
-                        ' 非エスケープの基本文字
-                        Select Case c.Size
-                            Case 1
-                                ' 単一バイト文字
-                                buf.Add(c.Raw0)
-                            Case 2
-                                ' 二バイト文字
-                                buf.Add(c.Raw0)
-                                buf.Add(c.Raw1)
-                            Case 3
-                                ' 三バイト文字
-                                buf.Add(c.Raw0)
-                                buf.Add(c.Raw1)
-                                buf.Add(c.Raw2)
-                            Case 4
-                                ' 四バイト文字
-                                buf.Add(c.Raw0)
-                                buf.Add(c.Raw1)
-                                buf.Add(c.Raw2)
-                                buf.Add(c.Raw3)
-                        End Select
+                        buf.AppendEscapeBytes(iter) ' 1
+                    ElseIf Not EqualCharByte(c, &H22) Then　' " の場合
+                        buf.AppendU8Char(c)         ' 2
+                    ElseIf EqualCharByte(c, &H22) Then ' "
+                        Return U8String.NewStringChangeOwner(buf.ToArray()) ' 3
                     Else
-                        ' 基本文字でない文字が来た場合は終了
-                        If IsQuotationMark(c) Then
-                            Return U8String.NewStringChangeOwner(buf.ToArray())
-                        Else
-                            ' 基本文字列の終了記号がない場合は例外をスロー
-                            Throw New TomlParseException("基本文字列の終了記号がありません。")
-                        End If
+                        iter.SetCurrentIndex(startIndex)    ' 4
+                        Throw New TomlParseException("基本文字列の終了記号がありません。")
                     End If
                 End While
             End If
+            iter.SetCurrentIndex(startIndex)
             Throw New TomlParseException("基本文字列の開始記号がありません。")
-        End Function
-
-        ''' <summary>
-        ''' 16進数文字を数値に変換します。
-        ''' 引数のバイトは、ASCIIコードの16進数文字（0-9, A-F, a-f）である必要があります。
-        ''' それ以外の文字が来た場合は例外をスローします。
-        ''' </summary>
-        ''' <param name="srcByte">変換する文字。</param>
-        ''' <returns>変換した値。</returns>
-        Private Function ToByteHex(srcByte As Byte) As Byte
-            If srcByte >= &H30 AndAlso srcByte <= &H39 Then
-                Return CByte(srcByte - &H30) ' 0-9
-            ElseIf srcByte >= &H41 AndAlso srcByte <= &H46 Then
-                Return CByte(srcByte - &H41 + 10) ' A-F
-            ElseIf srcByte >= &H61 AndAlso srcByte <= &H66 Then
-                Return CByte(srcByte - &H61 + 10) ' a-f
-            End If
-            Throw New TomlParseException("無効な16進数文字です。")
-        End Function
-
-        ''' <summary>U8StringのイテレータからUTF-8の文字を取得し、バイト領域に追加します。</summary>
-        ''' <param name="buf">バイト列を格納するリスト。</param>
-        ''' <param name="iter">U8Stringのイテレータ。</param>
-        ''' <param name="times">追加する16進数の文字数。</param>
-        Private Sub AddHexIter(buf As List(Of Byte), iter As U8String.U8StringIterator, times As Integer)
-            Dim b As Byte = 0
-            For i As Integer = 0 To times - 1
-                b = (b << 4) Or ToByteHex(iter.Current.Value.Raw0)
-                iter.MoveNext()
-                If (i And 1) <> 0 Then
-                    If b <> 0 Then
-                        buf.Add(b)
-                    End If
-                    b = 0
-                End If
-            Next
-        End Sub
-
-        ''' <summary>U8StringのイテレータからUTF-8の文字を取得し、バイト領域に追加します。</summary>
-        ''' <param name="buf">バイト列を格納するリスト。</param>
-        ''' <param name="iter">U8Stringのイテレータ。</param>
-        <Extension()>
-        Private Sub AppendEscapeBytes(buf As List(Of Byte), iter As U8String.U8StringIterator)
-            Dim nc = iter.MoveNext()
-            Select Case nc.Value.Raw0
-                Case &H22, &H5C
-                    buf.Add(nc.Value.Raw0)
-                Case &H62
-                    buf.Add(&H8)
-                Case &H66
-                    buf.Add(&HC)
-                Case &H6E
-                    buf.Add(&HA)
-                Case &H72
-                    buf.Add(&HD)
-                Case &H74
-                    buf.Add(&H9)
-                Case &H75
-                    AddHexIter(buf, iter, 4)
-                Case &H55
-                    AddHexIter(buf, iter, 8)
-                Case Else
-                    Throw New TomlParseException("無効なエスケープシーケンスです。")
-            End Select
-        End Sub
-
-        ''' <summary>引数で指定されたU8Charがダブルコーテーション(")であるかをチェックします。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>ダブルコーテーションの場合はTrue、それ以外はFalse。</returns>
-        Private Function IsQuotationMark(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                Return (u8c.Value.Raw0 = &H22)
-            End If
-            Return False
         End Function
 
         ''' <summary>
@@ -759,15 +621,14 @@ Namespace Toml
         Function MatchBasicChar(iter As U8String.U8StringIterator) As Boolean
             Dim startIndex = iter.CurrentIndex
 
+            ' 基本文字列のエスケープを判定
+            ' 1. 非エスケープの基本文字であるかをチェック
+            ' 2. エスケープ文字であるかをチェック
             If IsBasicUnescaped(iter.Current) Then
-                ' 非エスケープの基本文字
-                iter.MoveNext()
+                iter.MoveNext()             ' 1
                 Return True
-            Else
-                ' エスケープ文字
-                If MatchEscaped(iter) Then
-                    Return True
-                End If
+            ElseIf MatchEscaped(iter) Then  ' 2
+                Return True
             End If
 
             ' 基本文字でなければ偽
@@ -781,16 +642,10 @@ Namespace Toml
         ''' <param name="u8c">U8Char。</param>
         ''' <returns>基本文字列のエスケープされていない文字ならば真。</returns>
         Private Function IsBasicUnescaped(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                If IsWschar(u8c) OrElse
-                   u8c.Value.Raw0 = &H21 OrElse
-                   (u8c.Value.Raw0 >= &H23 AndAlso u8c.Value.Raw0 <= &H5B) OrElse
-                   (u8c.Value.Raw0 >= &H5D AndAlso u8c.Value.Raw0 <= &H7E) OrElse
-                   IsNonAscii(u8c) Then
-                    Return True
-                End If
-            End If
-            Return False
+            Return AnyCharByte(u8c, &H20, &H9, &H21) OrElse
+                   RangeCharByte(u8c, &H23, &H5B) OrElse
+                   RangeCharByte(u8c, &H5D, &H7E) OrElse
+                   IsNonAscii(u8c)
         End Function
 
         ''' <summary>
@@ -801,7 +656,9 @@ Namespace Toml
         ''' <returns>エスケープ文字ならば真。</returns>
         Function MatchEscaped(iter As U8String.U8StringIterator) As Boolean
             Dim startIndex = iter.CurrentIndex
-            If IsEscape(iter.Current) Then
+
+            ' エスケープ文字の開始を確認、エスケープ文字ならば真を返す
+            If EqualCharByte(iter.Current, &H5C) Then ' \
                 iter.MoveNext()
                 If MatchEscapeSeqChar(iter) Then
                     Return True
@@ -813,16 +670,6 @@ Namespace Toml
             Return False
         End Function
 
-        ''' <summary>エスケープ文字をチェックします。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>エスケープ文字の場合はTrue、それ以外はFalse。</returns>
-        Private Function IsEscape(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                Return (u8c.Value.Raw0 = &H5C)
-            End If
-            Return False
-        End Function
-
         ''' <summary>
         ''' 引数で指定されたU8Charがエスケープシーケンスの文字であるかをチェックします。
         ''' エスケープシーケンスは、バックスラッシュ（\）で始まり、特定の文字が続きます。
@@ -831,15 +678,8 @@ Namespace Toml
         ''' <param name="u8c2">現在のU8Char。</param>
         ''' <returns>エスケープシーケンスの文字ならば真。</returns>
         Private Function IsEscapedSeqChar(u8c1 As U8Char?, u8c2 As U8Char?) As Boolean
-            If u8c1.HasValue AndAlso u8c2.HasValue Then
-                Return (u8c1.Value.Raw0 = &H5C) AndAlso
-                       (u8c2.Value.Raw0 = &H5C OrElse u8c2.Value.Raw0 = &H22 OrElse
-                        u8c2.Value.Raw0 = &H62 OrElse u8c2.Value.Raw0 = &H66 OrElse
-                        u8c2.Value.Raw0 = &H6E OrElse u8c2.Value.Raw0 = &H72 OrElse
-                        u8c2.Value.Raw0 = &H74 OrElse u8c2.Value.Raw0 = &H75 OrElse
-                        u8c2.Value.Raw0 = &H55)
-            End If
-            Return False
+            Return EqualCharByte(u8c1, &H5C) AndAlso
+                   AnyCharByte(u8c2, &H5C, &H22, &H62, &H66, &H6E, &H72, &H74, &H75, &H55)
         End Function
 
         ''' <summary>エスケープが連続しているかチェックします。</summary>
@@ -882,6 +722,7 @@ Namespace Toml
 
                 ' 複数行基本文字列の内容を読み取る
                 If Not MatchMlBasicBody(iter) Then
+                    iter.SetCurrentIndex(startIndex)
                     Throw New TomlParseException("複数行基本文字列の内容がありません。", source, iter)
                 End If
 
@@ -914,6 +755,7 @@ Namespace Toml
                 ' 連続して複数行基本文字列の内容がマッチする限りループ
             End While
 
+            ' 複数行基本文字列の内容を読み進める
             While iter.HasNext()
                 Dim enable = False
                 Dim midIndex = iter.CurrentIndex
@@ -930,9 +772,11 @@ Namespace Toml
 
             ' 最後にダブルコーテーションが連続しているかをチェック
             Dim lastIndex = iter.CurrentIndex
-            While iter.HasNext() AndAlso IsQuotationMark(iter.Current)
+            While iter.HasNext() AndAlso EqualCharByte(iter.Current, &H22)
                 iter.MoveNext()
             End While
+
+            ' 最後のダブルコーテーションの判定
             Dim num = iter.CurrentIndex - lastIndex
             If num >= 3 AndAlso num <= 5 Then
                 iter.SetCurrentIndex(lastIndex + (num - 3))
@@ -997,9 +841,9 @@ Namespace Toml
             Dim startIndex = iter.CurrentIndex
 
             ' 複数行基本文字列の中でダブルコーテーションが連続しているかをチェック
-            If IsQuotationMark(iter.Current) Then
+            If EqualCharByte(iter.Current, &H22) Then ' "
                 iter.MoveNext()
-                If IsQuotationMark(iter.Current) Then
+                If EqualCharByte(iter.Current, &H22) Then ' "
                     iter.MoveNext()
                 End If
                 Return True
@@ -1017,16 +861,10 @@ Namespace Toml
         ''' <param name="u8c">U8Char。</param>
         ''' <returns>エスケープされていない文字の場合はTrue、それ以外はFalse。</returns>
         Private Function IsMlbUnescaped(u8c? As U8Char) As Boolean
-            If u8c.HasValue Then
-                If IsWschar(u8c) OrElse
-                   u8c.Value.Raw0 = &H21 OrElse
-                   (u8c.Value.Raw0 >= &H23 AndAlso u8c.Value.Raw0 <= &H5B) OrElse
-                   (u8c.Value.Raw0 >= &H5D AndAlso u8c.Value.Raw0 <= &H7E) OrElse
-                   IsNonAscii(u8c) Then
-                    Return True
-                End If
-            End If
-            Return False
+            Return AnyCharByte(u8c, &H20, &H9, &H21) OrElse
+                   RangeCharByte(u8c, &H23, &H5B) OrElse
+                   RangeCharByte(u8c, &H5D, &H7E) OrElse
+                   IsNonAscii(u8c)
         End Function
 
         ''' <summary>
@@ -1039,11 +877,11 @@ Namespace Toml
             Dim startIndex = iter.CurrentIndex
 
             ' エスケープ文字が来た場合は、改行を読み捨てる
-            If IsEscape(iter.Current) Then
+            If EqualCharByte(iter.Current, &H5C) Then ' \
                 iter.MoveNext()
 
                 ' 空白文字を読み捨てる
-                If IsWschar(iter.Current) Then
+                If AnyCharByte(iter.Current, &H20, &H9) Then
                     iter.MoveNext()
                 End If
 
@@ -1051,7 +889,7 @@ Namespace Toml
                 If MatchNewline(iter) Then
                     ' 空白と改行を読み捨てる
                     While iter.HasNext()
-                        If IsWschar(iter.Current) Then
+                        If AnyCharByte(iter.Current, &H20, &H9) Then
                             iter.MoveNext()
                         ElseIf MatchNewline(iter) Then
                             ' 改行を読み捨てる
@@ -1081,11 +919,11 @@ Namespace Toml
             Dim startIndex = iter.CurrentIndex
 
             ' 3つのダブルコーテーションが連続している場合は真を返す
-            If IsQuotationMark(iter.Current) Then
+            If EqualCharByte(iter.Current, &H22) Then ' "
                 iter.MoveNext()
-                If IsQuotationMark(iter.Current) Then
+                If EqualCharByte(iter.Current, &H22) Then ' "
                     iter.MoveNext()
-                    If IsQuotationMark(iter.Current) Then
+                    If EqualCharByte(iter.Current, &H22) Then ' "
                         iter.MoveNext()
                         Return True
                     End If
@@ -1117,10 +955,9 @@ Namespace Toml
                         ' エスケープシーケンスを解析
                         iter.MoveNext()
                         buf.AppendEscapeBytes(iter)
-                    ElseIf IsWschar(c) OrElse
-                       c.Value.Raw0 = &H21 OrElse
-                       (c.Value.Raw0 >= &H23 AndAlso c.Value.Raw0 <= &H5B) OrElse
-                       (c.Value.Raw0 >= &H5D AndAlso c.Value.Raw0 <= &H7E) Then
+                    ElseIf AnyCharByte(c, &H20, &H9, &H21) OrElse
+                           RangeCharByte(c.Value, &H23, &H5B) OrElse
+                           RangeCharByte(c.Value, &H5D, &H7E) Then
                         ' エスケープされていない文字
                         iter.MoveNext()
                         buf.Add(c.Value.Raw0)
@@ -1137,27 +974,7 @@ Namespace Toml
                     ElseIf IsNonAscii(c) Then
                         ' 非ASCII文字はそのまま追加
                         iter.MoveNext()
-                        Dim cv = c.Value
-                        Select Case cv.Size
-                            Case 1
-                                ' 単一バイト文字
-                                buf.Add(cv.Raw0)
-                            Case 2
-                                ' 二バイト文字
-                                buf.Add(cv.Raw0)
-                                buf.Add(cv.Raw1)
-                            Case 3
-                                ' 三バイト文字
-                                buf.Add(cv.Raw0)
-                                buf.Add(cv.Raw1)
-                                buf.Add(cv.Raw2)
-                            Case 4
-                                ' 四バイト文字
-                                buf.Add(cv.Raw0)
-                                buf.Add(cv.Raw1)
-                                buf.Add(cv.Raw2)
-                                buf.Add(cv.Raw3)
-                        End Select
+                        buf.AppendU8Char(c.Value)
                     End If
 
                     ' 行末改行は読み捨て
@@ -1165,7 +982,7 @@ Namespace Toml
 
                     ' 複数行基本文字列の終了記号が来た場合は終了
                     If MatchMlBasicStringDelim(iter) Then
-                        While iter.HasNext() AndAlso IsQuotationMark(iter.Current)
+                        While iter.HasNext() AndAlso EqualCharByte(iter.Current, &H22)
                             buf.Add(&H22)
                             iter.MoveNext()
                         End While
@@ -1193,7 +1010,7 @@ Namespace Toml
         ''' <returns>解析結果のTomlExpression。</returns>
         Function ParseLiteralString(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
             Dim startIndex = iter.CurrentIndex
-            If IsApostrophe(iter.Current) Then
+            If EqualCharByte(iter.Current, &H27) Then ' '
                 iter.MoveNext()
                 While iter.HasNext()
                     If IsLiteralChar(iter.Current) Then
@@ -1206,7 +1023,7 @@ Namespace Toml
                 End While
 
                 ' 解析結果をTomlExpressionとして返す
-                If IsApostrophe(iter.Current) Then
+                If EqualCharByte(iter.Current, &H27) Then ' '
                     iter.MoveNext()
                     Return New TomlExpression(TomlExpressionType.LiteralString, U8String.NewSlice(source, startIndex, iter.CurrentIndex - startIndex))
                 Else
@@ -1221,16 +1038,6 @@ Namespace Toml
             Return TomlExpression.Empty
         End Function
 
-        ''' <summary>引数で指定されたU8Charがアポストロフィ（'）であるかをチェックします。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>アポストロフィの場合はTrue、それ以外はFalse。</returns>
-        Private Function IsApostrophe(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                Return (u8c.Value.Raw0 = &H27)
-            End If
-            Return False
-        End Function
-
         ''' <summary>
         ''' 引数で指定されたU8Charがリテラル文字列の文字であるかをチェックします。
         ''' リテラル文字列では、アポストロフィ（'）以外の文字が許可されています。
@@ -1238,15 +1045,10 @@ Namespace Toml
         ''' <param name="u8c">U8Char。</param>
         ''' <returns>リテラル文字列の文字ならば真。</returns>
         Private Function IsLiteralChar(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                If u8c.Value.Raw0 = &H9 OrElse
-                   (u8c.Value.Raw0 >= &H20 AndAlso u8c.Value.Raw0 <= &H26) OrElse
-                   (u8c.Value.Raw0 >= &H28 AndAlso u8c.Value.Raw0 <= &H7E) OrElse
-                   IsNonAscii(u8c) Then
-                    Return True
-                End If
-            End If
-            Return False
+            Return EqualCharByte(u8c, &H9) OrElse
+                   RangeCharByte(u8c, &H20, &H26) OrElse
+                   RangeCharByte(u8c, &H28, &H7E) OrElse
+                   IsNonAscii(u8c)
         End Function
 
         ''' <summary>
@@ -1256,7 +1058,7 @@ Namespace Toml
         ''' <param name="iter">U8Stringのイテレータ。</param>
         ''' <returns>文字列。</returns>
         Function ConvertToLiteralString(iter As U8String.U8StringIterator) As U8String
-            If IsApostrophe(iter.Current) Then
+            If EqualCharByte(iter.Current, &H27) Then ' '
                 Dim buf As New List(Of Byte)()
 
                 iter.MoveNext()
@@ -1266,29 +1068,10 @@ Namespace Toml
 
                     If IsLiteralChar(c) Then
                         ' 非エスケープの基本文字
-                        Select Case c.Size
-                            Case 1
-                                ' 単一バイト文字
-                                buf.Add(c.Raw0)
-                            Case 2
-                                ' 二バイト文字
-                                buf.Add(c.Raw0)
-                                buf.Add(c.Raw1)
-                            Case 3
-                                ' 三バイト文字
-                                buf.Add(c.Raw0)
-                                buf.Add(c.Raw1)
-                                buf.Add(c.Raw2)
-                            Case 4
-                                ' 四バイト文字
-                                buf.Add(c.Raw0)
-                                buf.Add(c.Raw1)
-                                buf.Add(c.Raw2)
-                                buf.Add(c.Raw3)
-                        End Select
+                        buf.AppendU8Char(c) ' 追加
                     Else
                         ' リテラル文字でない文字が来た場合は終了
-                        If IsApostrophe(c) Then
+                        If EqualCharByte(c, &H27) Then ' '
                             Return U8String.NewStringChangeOwner(buf.ToArray())
                         Else
                             ' リテラル文字列の終了記号がない場合は例外をスロー
@@ -1347,11 +1130,11 @@ Namespace Toml
             Dim startIndex = iter.CurrentIndex
 
             ' 3つのアポストロフィが連続している場合は真を返す
-            If IsApostrophe(iter.Current) Then
+            If EqualCharByte(iter.Current, &H27) Then ' '
                 iter.MoveNext()
-                If IsApostrophe(iter.Current) Then
+                If EqualCharByte(iter.Current, &H27) Then ' '
                     iter.MoveNext()
-                    If IsApostrophe(iter.Current) Then
+                    If EqualCharByte(iter.Current, &H27) Then ' '
                         iter.MoveNext()
                         Return True
                     End If
@@ -1393,7 +1176,7 @@ Namespace Toml
 
             ' 最後にアポストロフィが連続しているかをチェック
             Dim lastIndex = iter.CurrentIndex
-            While iter.HasNext() AndAlso IsApostrophe(iter.Current)
+            While iter.HasNext() AndAlso EqualCharByte(iter.Current, &H27)
                 iter.MoveNext()
             End While
             Dim num = iter.CurrentIndex - lastIndex
@@ -1434,15 +1217,10 @@ Namespace Toml
         ''' <param name="u8c">U8Char。</param>
         ''' <returns>複数行リテラル文字列の文字の場合はTrue、それ以外はFalse。</returns>
         Private Function IsMllChar(u8c? As U8Char) As Boolean
-            If u8c.HasValue Then
-                If u8c.Value.Raw0 = &H9 OrElse
-                   (u8c.Value.Raw0 >= &H20 AndAlso u8c.Value.Raw0 <= &H26) OrElse
-                   (u8c.Value.Raw0 >= &H28 AndAlso u8c.Value.Raw0 <= &H7E) OrElse
-                   IsNonAscii(u8c) Then
-                    Return True
-                End If
-            End If
-            Return False
+            Return EqualCharByte(u8c, &H9) OrElse
+                   RangeCharByte(u8c, &H20, &H26) OrElse
+                   RangeCharByte(u8c, &H28, &H7E) OrElse
+                   IsNonAscii(u8c)
         End Function
 
         ''' <summary>
@@ -1455,9 +1233,9 @@ Namespace Toml
             Dim startIndex = iter.CurrentIndex
 
             ' 複数行基本文字列の中でアポストロフィが連続しているかをチェック
-            If IsApostrophe(iter.Current) Then
+            If EqualCharByte(iter.Current, &H27) Then ' '
                 iter.MoveNext()
-                If IsApostrophe(iter.Current) Then
+                If EqualCharByte(iter.Current, &H27) Then ' '
                     iter.MoveNext()
                 End If
                 Return True
@@ -1484,9 +1262,9 @@ Namespace Toml
                 While iter.HasNext()
                     Dim c = iter.Current
 
-                    If c.Value.Raw0 = &H9 OrElse
-                       (c.Value.Raw0 >= &H20 AndAlso c.Value.Raw0 <= &H26) OrElse
-                       (c.Value.Raw0 >= &H28 AndAlso c.Value.Raw0 <= &H7E) Then
+                    If EqualCharByte(c.Value, &H9) OrElse
+                       RangeCharByte(c.Value, &H20, &H26) OrElse
+                       RangeCharByte(c.Value, &H28, &H7E) Then
                         ' 文字
                         iter.MoveNext()
                         buf.Add(c.Value.Raw0)
@@ -1503,32 +1281,12 @@ Namespace Toml
                     ElseIf IsNonAscii(c) Then
                         ' 非ASCII文字はそのまま追加
                         iter.MoveNext()
-                        Dim cv = c.Value
-                        Select Case cv.Size
-                            Case 1
-                                ' 単一バイト文字
-                                buf.Add(cv.Raw0)
-                            Case 2
-                                ' 二バイト文字
-                                buf.Add(cv.Raw0)
-                                buf.Add(cv.Raw1)
-                            Case 3
-                                ' 三バイト文字
-                                buf.Add(cv.Raw0)
-                                buf.Add(cv.Raw1)
-                                buf.Add(cv.Raw2)
-                            Case 4
-                                ' 四バイト文字
-                                buf.Add(cv.Raw0)
-                                buf.Add(cv.Raw1)
-                                buf.Add(cv.Raw2)
-                                buf.Add(cv.Raw3)
-                        End Select
+                        buf.AppendU8Char(c.Value)
                     End If
 
                     ' 複数行基本文字列の終了記号が来た場合は終了
                     If MatchMlliteralStringDelim(iter) Then
-                        While iter.HasNext() AndAlso IsApostrophe(iter.Current)
+                        While iter.HasNext() AndAlso EqualCharByte(iter.Current, &H27)
                             buf.Add(&H27)
                             iter.MoveNext()
                         End While
@@ -1590,72 +1348,15 @@ Namespace Toml
             Return TomlExpression.Empty
         End Function
 
-        ''' <summary>_（アンダースコア）をチェックします。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>アンダースコアの場合はTrue、それ以外はFalse。</returns>
-        Private Function IsUnderscore(u8c As U8Char?) As Boolean
-            Return u8c.HasValue AndAlso u8c.Value.Raw0 = &H5F
-        End Function
-
-        ''' <summary>1から9の数字をチェックします。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>1から9の数字の場合はTrue、それ以外はFalse。</returns>
-        Private Function IsDigit1to9(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                Return (u8c.Value.Raw0 >= &H31 AndAlso u8c.Value.Raw0 <= &H39)
-            End If
-            Return False
-        End Function
-
-        ''' <summary>0から7の数字をチェックします。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>0から7の数字の場合はTrue、それ以外はFalse。</returns>
-        Private Function IsDigit0to7(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                Return (u8c.Value.Raw0 >= &H30 AndAlso u8c.Value.Raw0 <= &H37)
-            End If
-            Return False
-        End Function
-
-        ''' <summary>0か1の数字をチェックします。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>0か1の数字の場合はTrue、それ以外はFalse。</returns>
-        Private Function IsDigit0or1(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                Return (u8c.Value.Raw0 = &H30 OrElse u8c.Value.Raw0 = &H31)
-            End If
-            Return False
-        End Function
-
-        ''' <summary>16進数のプレフィックス（0x）をチェックします。</summary>
+        ''' <summary>n進数のプレフィックスをチェックします。</summary>
         ''' <param name="u8c1">最初のU8Char。</param>
         ''' <param name="u8c2">次のU8Char。</param>
-        ''' <returns>16進数のプレフィックスの場合はTrue、それ以外はFalse。</returns>
-        Private Function IsHexPrefix(u8c1 As U8Char?, u8c2 As U8Char?) As Boolean
+        ''' <param name="byte1">1文字目。</param>
+        ''' <param name="byte2">2文字目。</param>
+        ''' <returns>n進数のプレフィックスの場合はTrue、それ以外はFalse。</returns>
+        Private Function EqualNumPrefix(u8c1 As U8Char?, u8c2 As U8Char?, byte1 As Byte, byte2 As Byte) As Boolean
             If u8c1.HasValue AndAlso u8c2.HasValue Then
-                Return (u8c1.Value.Raw0 = &H30 AndAlso u8c2.Value.Raw0 = &H78)
-            End If
-            Return False
-        End Function
-
-        ''' <summary>8進数のプレフィックス（0o）をチェックします。</summary>
-        ''' <param name="u8c1">最初のU8Char。</param>
-        ''' <param name="u8c2">次のU8Char。</param>
-        ''' <returns>8進数のプレフィックスの場合はTrue、それ以外はFalse。</returns>
-        Private Function IsOctPrefix(u8c1 As U8Char?, u8c2 As U8Char?) As Boolean
-            If u8c1.HasValue AndAlso u8c2.HasValue Then
-                Return (u8c1.Value.Raw0 = &H30 AndAlso u8c2.Value.Raw0 = &H6F)
-            End If
-            Return False
-        End Function
-
-        ''' <summary>2進数のプレフィックス（0b）をチェックします。</summary>
-        ''' <param name="u8c1">最初のU8Char。</param>
-        ''' <param name="u8c2">次のU8Char。</param>
-        ''' <returns>2進数のプレフィックスの場合はTrue、それ以外はFalse。</returns>
-        Private Function IsBinPrefix(u8c1 As U8Char?, u8c2 As U8Char?) As Boolean
-            If u8c1.HasValue AndAlso u8c2.HasValue Then
-                Return (u8c1.Value.Raw0 = &H30 AndAlso u8c2.Value.Raw0 = &H62)
+                Return (u8c1.Value.Raw0 = byte1 AndAlso u8c2.Value.Raw0 = byte2)
             End If
             Return False
         End Function
@@ -1673,11 +1374,7 @@ Namespace Toml
             Dim startIndex = iter.CurrentIndex
 
             ' 符号が来た場合は読み進める
-            With iter.Current
-                If .HasValue AndAlso (.Value.Raw0 = &H2D OrElse .Value.Raw0 = &H2B) Then
-                    iter.MoveNext()
-                End If
-            End With
+            ReadNumberSignIsPlus(iter)
 
             ' 符号付き整数として扱う
             If MatchUnsignedDecInt(iter) Then
@@ -1703,16 +1400,17 @@ Namespace Toml
             Dim startIndex = iter.CurrentIndex
             Dim firstChar = iter.Current
 
-            If IsDigit1to9(firstChar) Then
+            If RangeCharByte(firstChar, &H31, &H39) Then ' 1-9の範囲
                 ' 1から9の数字が最初に来る場合
                 iter.MoveNext()
                 Dim enable = False
                 While iter.HasNext()
-                    If IsDigit(iter.Current) Then
+                    If RangeCharByte(iter.Current, &H30, &H39) Then ' 0-9の範囲
                         ' 0-9が続く場合
                         enable = True
                         iter.MoveNext()
-                    ElseIf IsUnderscore(iter.Current) AndAlso IsDigit(iter.Peek(1)) Then
+                    ElseIf EqualCharByte(iter.Current, &H5F) AndAlso
+                           RangeCharByte(iter.Peek(1), &H30, &H39) Then
                         ' アンダースコアが続き、その後に数字が来る場合
                         enable = True
                         iter.MoveNext()
@@ -1731,7 +1429,7 @@ Namespace Toml
 
             ' 数値1文字判定(0)
             iter.SetCurrentIndex(startIndex)
-            If IsDigit(firstChar) Then
+            If RangeCharByte(firstChar, &H30, &H39) Then ' 0-9の範囲
                 iter.MoveNext()
                 Return True
             End If
@@ -1749,21 +1447,14 @@ Namespace Toml
         ''' 符号がある場合は、符号に応じて数値を計算します。
         ''' </remarks>
         Function ConvertToDecInt(iter As U8String.U8StringIterator) As Long
-            Dim isPlus As Boolean = True
-
-            ' 符号が来た場合は読み進める
-            With iter.Current
-                If .HasValue AndAlso (.Value.Raw0 = &H2D OrElse .Value.Raw0 = &H2B) Then
-                    isPlus = (.Value.Raw0 = &H2B)
-                    iter.MoveNext()
-                End If
-            End With
+            ' 符号を読み進める
+            Dim isPlus = ReadNumberSignIsPlus(iter)
 
             ' 文字を数値化
             Dim res As ULong = 0
             While iter.HasNext()
                 With iter.Current
-                    If IsDigit(iter.Current) Then
+                    If RangeCharByte(iter.Current, &H30, &H39) Then ' 0-9の範囲
                         res = res * 10UL + CULng(iter.Current.Value.Raw0 - &H30)
                     End If
                 End With
@@ -1827,7 +1518,7 @@ Namespace Toml
         Public Function ParseHexInt(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
             Dim startIndex = iter.CurrentIndex
 
-            If IsHexPrefix(iter.Current, iter.Peek(1)) Then
+            If EqualNumPrefix(iter.Current, iter.Peek(1), &H30, &H78) Then ' 0x
                 iter.MoveNext()
                 iter.MoveNext()
 
@@ -1838,7 +1529,7 @@ Namespace Toml
                         If IsHexdig(iter.Current) Then
                             ' 0-9, A-Fが続く場合
                             iter.MoveNext()
-                        ElseIf IsUnderscore(iter.Current) AndAlso IsHexdig(iter.Peek(1)) Then
+                        ElseIf EqualCharByte(iter.Current, &H5F) AndAlso IsHexdig(iter.Peek(1)) Then
                             ' アンダースコアが続き、その後に数字が来る場合
                             iter.MoveNext()
                             iter.MoveNext()
@@ -1874,18 +1565,18 @@ Namespace Toml
         Public Function ParseOctInt(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
             Dim startIndex = iter.CurrentIndex
 
-            If IsOctPrefix(iter.Current, iter.Peek(1)) Then
+            If EqualNumPrefix(iter.Current, iter.Peek(1), &H30, &H6F) Then  ' 0o
                 iter.MoveNext()
                 iter.MoveNext()
 
                 ' 8進数のプレフィックスがある場合、次に数字が続くかを確認
-                If IsDigit0to7(iter.Current) Then
+                If RangeCharByte(iter.Current, &H30, &H37) Then ' 0-7の範囲
                     iter.MoveNext()
                     While iter.HasNext()
-                        If IsDigit0to7(iter.Current) Then
+                        If RangeCharByte(iter.Current, &H30, &H37) Then
                             ' 0-7が続く場合
                             iter.MoveNext()
-                        ElseIf IsUnderscore(iter.Current) AndAlso IsDigit0to7(iter.Peek(1)) Then
+                        ElseIf EqualCharByte(iter.Current, &H5F) AndAlso RangeCharByte(iter.Peek(1), &H30, &H37) Then
                             ' アンダースコアが続き、その後に数字が来る場合
                             iter.MoveNext()
                             iter.MoveNext()
@@ -1921,18 +1612,18 @@ Namespace Toml
         Public Function ParseBinInt(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
             Dim startIndex = iter.CurrentIndex
 
-            If IsBinPrefix(iter.Current, iter.Peek(1)) Then
+            If EqualNumPrefix(iter.Current, iter.Peek(1), &H30, &H62) Then  ' 0b
                 iter.MoveNext()
                 iter.MoveNext()
 
                 ' 2進数のプレフィックスがある場合、次に数字が続くかを確認
-                If IsDigit0or1(iter.Current) Then
+                If AnyCharByte(iter.Current, &H30, &H31) Then
                     iter.MoveNext()
                     While iter.HasNext()
-                        If IsDigit0or1(iter.Current) Then
+                        If AnyCharByte(iter.Current, &H30, &H31) Then
                             ' 0-1が続く場合
                             iter.MoveNext()
-                        ElseIf IsUnderscore(iter.Current) AndAlso IsDigit0or1(iter.Peek(1)) Then
+                        ElseIf EqualCharByte(iter.Current, &H5F) AndAlso AnyCharByte(iter.Peek(1), &H30, &H31) Then
                             ' アンダースコアが続き、その後に数字が来る場合
                             iter.MoveNext()
                             iter.MoveNext()
@@ -2011,13 +1702,14 @@ Namespace Toml
         ''' </remarks>
         Function MatchZeroPrefixableInt(iter As U8String.U8StringIterator) As Boolean
             Dim startIndex = iter.CurrentIndex
-            If IsDigit(iter.Current) Then
+            If RangeCharByte(iter.Current, &H30, &H39) Then ' 0-9の範囲
                 iter.MoveNext()
                 While iter.HasNext()
-                    If IsDigit(iter.Current) Then
+                    If RangeCharByte(iter.Current, &H30, &H39) Then
                         ' 0-9が続く場合
                         iter.MoveNext()
-                    ElseIf IsUnderscore(iter.Current) AndAlso IsDigit(iter.Peek(1)) Then
+                    ElseIf EqualCharByte(iter.Current, &H5F) AndAlso
+                           RangeCharByte(iter.Peek(1), &H30, &H39) Then
                         ' アンダースコアが続き、その後に数字が来る場合
                         iter.MoveNext()
                         iter.MoveNext()
@@ -2043,14 +1735,12 @@ Namespace Toml
         Private Function MatchExp(iter As U8String.U8StringIterator) As Boolean
             Dim startIndex = iter.CurrentIndex
             ' e または E が来た場合は読み進める
-            With iter.Current
-                If .HasValue AndAlso (.Value.Raw0 = &H65 OrElse .Value.Raw0 = &H45) Then
-                    iter.MoveNext()
-                Else
-                    ' e または E が来なかった場合は終了
-                    Return False
-                End If
-            End With
+            If AnyCharByte(iter.Current, &H65, &H45) Then
+                iter.MoveNext()
+            Else
+                ' e または E が来なかった場合は終了
+                Return False
+            End If
 
             ' 浮動小数点数の指数部を解析する
             If MatchFloatExpPart(iter) Then
@@ -2068,11 +1758,7 @@ Namespace Toml
             Dim startIndex = iter.CurrentIndex
 
             ' 符号が来た場合は読み進める
-            With iter.Current
-                If .HasValue AndAlso (.Value.Raw0 = &H2D OrElse .Value.Raw0 = &H2B) Then
-                    iter.MoveNext()
-                End If
-            End With
+            ReadNumberSignIsPlus(iter)
 
             ' 浮動小数点数の指数部を解析する
             If MatchZeroPrefixableInt(iter) Then
@@ -2096,11 +1782,7 @@ Namespace Toml
             Dim startIndex = iter.CurrentIndex
 
             ' 符号が来た場合は読み進める
-            With iter.Current
-                If .HasValue AndAlso (.Value.Raw0 = &H2D OrElse .Value.Raw0 = &H2B) Then
-                    iter.MoveNext()
-                End If
-            End With
+            ReadNumberSignIsPlus(iter)
 
             If MatchInf(iter) Then
                 ' Inf（Infinity）を解析
@@ -2162,22 +1844,15 @@ Namespace Toml
         ''' 符号がある場合は、符号に応じて数値を計算します。
         ''' </remarks>
         Function ConvertToFloat(iter As U8String.U8StringIterator) As Double
-            Dim isPlus As Boolean = True
-
-            ' 符号が来た場合は読み進める
-            With iter.Current
-                If .HasValue AndAlso (.Value.Raw0 = &H2D OrElse .Value.Raw0 = &H2B) Then
-                    isPlus = (.Value.Raw0 = &H2B)
-                    iter.MoveNext()
-                End If
-            End With
+            ' 符号を読み進める
+            Dim isPlus = ReadNumberSignIsPlus(iter)
 
             ' 文字を数値化
             Dim res As ULong = 0
             Dim decfig As Integer = -1
             While iter.HasNext()
                 With iter.Current
-                    If IsDigit(iter.Current) Then
+                    If RangeCharByte(iter.Current, &H30, &H39) Then ' 0-9の範囲
                         res = res * 10UL + CULng(iter.Current.Value.Raw0 - &H30)
                         ' 小数点以下の桁数をカウント
                         If decfig >= 0 Then
@@ -2200,24 +1875,16 @@ Namespace Toml
             End If
 
             ' 指数部がある場合は、10のべき乗を調整
-            If iter.HasNext() AndAlso
-               (iter.Current.Value.Raw0 = &H65 OrElse
-                iter.Current.Value.Raw0 = &H45) Then
+            If iter.HasNext() AndAlso AnyCharByte(iter.Current, &H65, &H45) Then
                 iter.MoveNext()
 
                 ' 指数部の符号をチェック
-                Dim expSign As Boolean = True
-                With iter.Current
-                    If .HasValue AndAlso (.Value.Raw0 = &H2D OrElse .Value.Raw0 = &H2B) Then
-                        expSign = (.Value.Raw0 = &H2B)
-                        iter.MoveNext()
-                    End If
-                End With
+                Dim expSign = ReadNumberSignIsPlus(iter)
 
                 ' 文字を数値化
                 Dim expValue As ULong = 0
                 While iter.HasNext()
-                    If IsDigit(iter.Current) Then
+                    If RangeCharByte(iter.Current, &H30, &H39) Then ' 0-9の範囲
                         expValue = expValue * 10UL + CULng(iter.Current.Value.Raw0 - &H30)
                     End If
                     iter.MoveNext()
@@ -2378,22 +2045,6 @@ Namespace Toml
         End Function
 
         ''' <summary>
-        ''' 引数で指定されたU8Charが時間の区切り文字（Tまたは空白）であるかをチェックします。
-        ''' </summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>時間の区切り文字ならば真。</returns>
-        ''' <remarks>
-        ''' 時間の区切り文字は、ISO 8601形式の日付と時間の区切りに使用されます。
-        ''' </remarks>
-        Private Function IsTimeDelim(u8c As U8Char?) As Boolean
-            ' 'T'か空白をチェック
-            If u8c.HasValue Then
-                Return u8c.Value.Raw0 = &H54 OrElse u8c.Value.Raw0 = &H20
-            End If
-            Return False
-        End Function
-
-        ''' <summary>
         ''' 引数で指定されたU8Stringから、時間オフセットの部分を解析します。
         ''' </summary>
         ''' <param name="iter">U8Stringのイテレータ。</param>
@@ -2402,14 +2053,12 @@ Namespace Toml
             Dim startIndex = iter.CurrentIndex
 
             ' 符号が来た場合は読み進める
-            With iter.Current
-                If .HasValue AndAlso (.Value.Raw0 = &H2D OrElse .Value.Raw0 = &H2B) Then
-                    iter.MoveNext()
-                Else
-                    ' 符号が来なかった場合は終了
-                    Return False
-                End If
-            End With
+            If AnyCharByte(iter.Current, &H2D, &H2B) Then ' - または +
+                iter.MoveNext()
+            Else
+                ' 符号が来なかった場合は終了
+                Return False
+            End If
 
             ' 時間の部分を解析
             If Not MatchDigitTimes(iter, 2) Then
@@ -2418,7 +2067,7 @@ Namespace Toml
             End If
 
             ' 時間の後にコロン（:）が来ない場合は終了
-            If iter.Current?.Raw0 = &H3A Then ' :
+            If EqualCharByte(iter.Current, &H3A) Then ' :
                 iter.MoveNext()
             Else
                 iter.SetCurrentIndex(startIndex)
@@ -2441,7 +2090,7 @@ Namespace Toml
             Dim startIndex = iter.CurrentIndex
 
             ' 時間オフセットの部分は、Z（Zulu time）または時間-分単位の形式で表されます。
-            If iter.Current?.Raw0 = &H5A Then ' Z
+            If EqualCharByte(iter.Current, &H5A) Then ' Z
                 iter.MoveNext()
                 Return True
             ElseIf MatchTimeNumOffset(iter) Then
@@ -2468,7 +2117,7 @@ Namespace Toml
 
                 Dim enable = False
                 While iter.HasNext()
-                    If IsDigit(iter.Current) Then
+                    If RangeCharByte(iter.Current, &H30, &H39) Then ' 0-9の範囲
                         enable = True
                         iter.MoveNext()
                     Else
@@ -2508,7 +2157,7 @@ Namespace Toml
             End If
 
             ' 時間の後にコロン（:）が来ない場合は終了
-            If iter.Current?.Raw0 = &H3A Then ' :
+            If EqualCharByte(iter.Current, &H3A) Then ' :
                 iter.MoveNext()
             Else
                 iter.SetCurrentIndex(startIndex)
@@ -2522,7 +2171,7 @@ Namespace Toml
             End If
 
             ' 分の後にコロン（:）が来ない場合は終了
-            If iter.Current?.Raw0 = &H3A Then ' :
+            If EqualCharByte(iter.Current, &H3A) Then ' :
                 iter.MoveNext()
             Else
                 iter.SetCurrentIndex(startIndex)
@@ -2560,7 +2209,7 @@ Namespace Toml
             End If
 
             ' 年の後にコロン（-）が来ない場合は終了
-            If iter.Current?.Raw0 = &H2D Then ' -
+            If EqualCharByte(iter.Current, &H2D) Then ' -
                 iter.MoveNext()
             Else
                 iter.SetCurrentIndex(startIndex)
@@ -2574,7 +2223,7 @@ Namespace Toml
             End If
 
             ' 月の後にコロン（-）が来ない場合は終了
-            If iter.Current?.Raw0 = &H2D Then ' -
+            If EqualCharByte(iter.Current, &H2D) Then ' -
                 iter.MoveNext()
             Else
                 iter.SetCurrentIndex(startIndex)
@@ -2627,7 +2276,7 @@ Namespace Toml
         Function ParseOffsetDateTime(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
             Dim startIndex = iter.CurrentIndex
             If MatchFullDate(iter) Then
-                If IsTimeDelim(iter.Current) Then
+                If AnyCharByte(iter.Current, &H54, &H20) Then ' Tまたは空白
                     iter.MoveNext() ' Tまたは空白を読み飛ばす
                     If MatchFullTime(iter) Then
                         Return New TomlExpression(TomlExpressionType.OffsetDateTime, U8String.NewSlice(source, startIndex, iter.CurrentIndex - startIndex))
@@ -2656,7 +2305,7 @@ Namespace Toml
         Function ParseLocalDateTime(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
             Dim startIndex = iter.CurrentIndex
             If MatchFullDate(iter) Then
-                If IsTimeDelim(iter.Current) Then
+                If AnyCharByte(iter.Current, &H54, &H20) Then ' Tまたは空白
                     iter.MoveNext() ' Tまたは空白を読み飛ばす
                     If MatchPartialTime(iter) Then
                         Return New TomlExpression(TomlExpressionType.LocalDateTime, U8String.NewSlice(source, startIndex, iter.CurrentIndex - startIndex))
@@ -2726,49 +2375,37 @@ Namespace Toml
         ''' 日時は、YYYY-MM-DDTHH:MM:SS[.SSS][Z|±HH:MM]の形式で表されます。
         ''' </remarks>
         Function ConvertToOffsetDateTime(iter As U8String.U8StringIterator) As DateTimeOffset
-            Dim year = ToTimeDecInt(iter, 4)
-            iter.MoveNext()
-            Dim month = ToTimeDecInt(iter, 2)
-            iter.MoveNext()
-            Dim day = ToTimeDecInt(iter, 2)
+            ' 日付の部分を読み取る
+            Dim dt = ReadDateBlock(iter)
             iter.MoveNext()
 
-            Dim hours = ToTimeDecInt(iter, 2)
-            iter.MoveNext()
-            Dim minutes = ToTimeDecInt(iter, 2)
-            iter.MoveNext()
-            Dim seconds = ToTimeDecInt(iter, 2)
-
-            Dim milliseconds = 0
-            If iter.HasNext() AndAlso iter.Current.Value.Raw0 = &H2E Then
-                iter.MoveNext()
-                milliseconds = ToTimeDecInt(iter, Integer.MaxValue)
-                If milliseconds >= 1000 Then
-                    milliseconds = milliseconds \ 1000
-                End If
-            End If
+            ' 時間の部分を読み取る
+            Dim tm = ReadTimeBlock(iter)
 
             Dim offTime As TimeSpan = TimeSpan.Zero
             If iter.HasNext() Then
-                If iter.Current.Value.Raw0 = &H5A Then
-                    ' Zulu time（UTC）を指定、オフセットはゼロ
-                ElseIf iter.Current.Value.Raw0 = &H2D Then
-                    iter.MoveNext()
-                    Dim offhours = ToTimeDecInt(iter, 2)
-                    iter.MoveNext()
-                    Dim offminutes = ToTimeDecInt(iter, 2)
-                    iter.MoveNext()
-                    offTime = TimeSpan.FromMinutes(-(offhours * 60 + offminutes))
-                ElseIf iter.Current.Value.Raw0 = &H2B Then
-                    iter.MoveNext()
-                    Dim offhours = ToTimeDecInt(iter, 2)
-                    iter.MoveNext()
-                    Dim offminutes = ToTimeDecInt(iter, 2)
-                    iter.MoveNext()
-                    offTime = TimeSpan.FromMinutes(offhours * 60 + offminutes)
-                End If
+                Select Case iter.Current.Value.Raw0
+                    Case &H5A
+                        ' Zulu time（UTC）を指定、オフセットはゼロ
+
+                    Case &H2D
+                        ' マイナスオフセット
+                        iter.MoveNext()
+                        With ReadSimpleTimeBlock(iter)
+                            iter.MoveNext()
+                            offTime = TimeSpan.FromMinutes(-(.hours * 60 + .minutes))
+                        End With
+
+                    Case &H2B
+                        ' プラスオフセット
+                        iter.MoveNext()
+                        With ReadSimpleTimeBlock(iter)
+                            iter.MoveNext()
+                            offTime = TimeSpan.FromMinutes(.hours * 60 + .minutes)
+                        End With
+                End Select
             End If
-            Return New DateTimeOffset(year, month, day, hours, minutes, seconds, milliseconds, offTime)
+            Return New DateTimeOffset(dt.year, dt.month, dt.day, tm.hours, tm.minutes, tm.seconds, tm.milliseconds, offTime)
         End Function
 
         ''' <summary>
@@ -2780,25 +2417,14 @@ Namespace Toml
         ''' 日時は、YYYY-MM-DDTHH:MM:SS[.SSS]の形式で表されます。
         ''' </remarks>
         Function ConvertToLocalDateTime(iter As U8String.U8StringIterator) As DateTime
-            Dim year = ToTimeDecInt(iter, 4)
-            iter.MoveNext()
-            Dim month = ToTimeDecInt(iter, 2)
-            iter.MoveNext()
-            Dim day = ToTimeDecInt(iter, 2)
+            ' 日付の部分を読み取る
+            Dim dt = ReadDateBlock(iter)
             iter.MoveNext()
 
-            Dim hours = ToTimeDecInt(iter, 2)
-            iter.MoveNext()
-            Dim minutes = ToTimeDecInt(iter, 2)
-            iter.MoveNext()
-            Dim seconds = ToTimeDecInt(iter, 2)
-            iter.MoveNext()
-            Dim milliseconds = ToTimeDecInt(iter, Integer.MaxValue)
-            If milliseconds >= 1000 Then
-                milliseconds = milliseconds \ 1000
-            End If
+            ' 時間の部分を読み取る
+            Dim tm = ReadTimeBlock(iter)
 
-            Return New DateTime(year, month, day, hours, minutes, seconds, milliseconds, DateTimeKind.Local)
+            Return New DateTime(dt.year, dt.month, dt.day, tm.hours, tm.minutes, tm.seconds, tm.milliseconds, DateTimeKind.Local)
         End Function
 
         ''' <summary>
@@ -2810,12 +2436,9 @@ Namespace Toml
         ''' 日付は、YYYY-MM-DDの形式で表されます。
         ''' </remarks>
         Function ConvertToLocalDate(iter As U8String.U8StringIterator) As DateTime
-            Dim year = ToTimeDecInt(iter, 4)
-            iter.MoveNext()
-            Dim month = ToTimeDecInt(iter, 2)
-            iter.MoveNext()
-            Dim day = ToTimeDecInt(iter, 2)
-            Return New DateTime(year, month, day, 0, 0, 0, DateTimeKind.Local)
+            With ReadDateBlock(iter)
+                Return New DateTime(.year, .month, .day, 0, 0, 0, DateTimeKind.Local)
+            End With
         End Function
 
         ''' <summary>
@@ -2827,18 +2450,67 @@ Namespace Toml
         ''' 時間は、時:分:秒[.SSS]の形式で表されます。
         ''' </remarks>
         Function ConvertToLocalTime(iter As U8String.U8StringIterator) As TimeSpan
+            With ReadTimeBlock(iter)
+                Return New TimeSpan(0, .hours, .minutes, .seconds, .milliseconds)
+            End With
+        End Function
+
+        ''' <summary>引数で指定されたU8Stringのイテレータから、年月日ブロック（YYYY-MM-DD）を読み取ります。</summary>
+        ''' <param name="iter">U8Stringのイテレータ。</param>
+        ''' <returns>年月日のタプル（年、月、日）。</returns>
+        ''' <remarks>
+        ''' 年月日は4桁の年、2桁の月、2桁の日で構成されます。
+        ''' </remarks>
+        Private Function ReadDateBlock(iter As U8String.U8StringIterator) As (year As Integer, month As Integer, day As Integer)
+            ' 年月日の部分を読み取る
+            Dim year = ToTimeDecInt(iter, 4)
+            iter.MoveNext()
+            Dim month = ToTimeDecInt(iter, 2)
+            iter.MoveNext()
+            Dim day = ToTimeDecInt(iter, 2)
+            Return (year, month, day)
+        End Function
+
+        ''' <summary>引数で指定されたU8Stringのイテレータから、時分ブロック（HH:MM）を読み取ります。</summary>
+        ''' <param name="iter">U8Stringのイテレータ。</param>
+        ''' <returns>時分のタプル（時間、分）。</returns>
+        ''' <remarks>
+        ''' 時分は2桁の時間と2桁の分で構成されます。
+        ''' </remarks>
+        Private Function ReadSimpleTimeBlock(iter As U8String.U8StringIterator) As (hours As Integer, minutes As Integer)
+            ' 時分秒の部分を読み取る
+            Dim hours = ToTimeDecInt(iter, 2)
+            iter.MoveNext()
+            Dim minutes = ToTimeDecInt(iter, 2)
+
+            Return (hours, minutes)
+        End Function
+
+        ''' <summary>引数で指定されたU8Stringのイテレータから、時間ブロック（HH:MM:SS[.SSS]）を読み取ります。</summary>
+        ''' <param name="iter">U8Stringのイテレータ。</param>
+        ''' <returns>時間ブロックのタプル（時間、分、秒、ミリ秒）。</returns>
+        ''' <remarks>
+        ''' ミリ秒は1000で割られた値として返されます。
+        ''' </remarks>
+        Private Function ReadTimeBlock(iter As U8String.U8StringIterator) As (hours As Integer, minutes As Integer, seconds As Integer, milliseconds As Integer)
+            ' 時分秒の部分を読み取る
             Dim hours = ToTimeDecInt(iter, 2)
             iter.MoveNext()
             Dim minutes = ToTimeDecInt(iter, 2)
             iter.MoveNext()
             Dim seconds = ToTimeDecInt(iter, 2)
-            iter.MoveNext()
-            Dim milliseconds = ToTimeDecInt(iter, Integer.MaxValue)
-            If milliseconds >= 1000 Then
-                milliseconds = milliseconds \ 1000
+
+            ' あればミリ秒の部分を読み取る
+            Dim milliseconds = 0
+            If iter.HasNext() AndAlso EqualCharByte(iter.Current, &H2E) Then
+                iter.MoveNext()
+                milliseconds = ToTimeDecInt(iter, Integer.MaxValue)
+                If milliseconds >= 1000 Then
+                    milliseconds = milliseconds \ 1000
+                End If
             End If
 
-            Return New TimeSpan(0, hours, minutes, seconds, milliseconds)
+            Return (hours, minutes, seconds, milliseconds)
         End Function
 
         ''' <summary>引数で指定されたU8Stringのイテレータから、文字を整数に変換します。</summary>
@@ -2851,7 +2523,7 @@ Namespace Toml
             Dim len As Integer = 0
             While len < strlen AndAlso iter.HasNext()
                 With iter.Current
-                    If IsDigit(iter.Current) Then
+                    If RangeCharByte(iter.Current, &H30, &H39) Then ' 0-9の範囲
                         res = res * 10 + (iter.Current.Value.Raw0 - &H30)
                     Else
                         ' 数字以外の文字が来た場合は終了
@@ -2882,7 +2554,7 @@ Namespace Toml
         Function ParseArray(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
             Dim startIndex = iter.CurrentIndex
 
-            If IsArrayOpen(iter.Current) Then
+            If EqualCharByte(iter.Current, &H5B) Then
                 ' 配列の始端（[）が来た場合は読み進める
                 iter.MoveNext()
 
@@ -2894,7 +2566,7 @@ Namespace Toml
                 ParseWsCommentNewline(source, iter)
 
                 ' 配列の終端（]）が来た場合は読み進める
-                If IsArrayClose(iter.Current) Then
+                If EqualCharByte(iter.Current, &H5D) Then
                     iter.MoveNext()
                     Return New TomlExpression(TomlExpressionType.Array, U8String.NewSlice(source, startIndex, iter.CurrentIndex - startIndex), expressions.ToArray())
                 Else
@@ -2906,26 +2578,6 @@ Namespace Toml
             ' 配列の始端が来なかった場合は空の式を返す
             iter.SetCurrentIndex(startIndex)
             Return TomlExpression.Empty
-        End Function
-
-        ''' <summary>引数で指定されたU8Stringから、配列の始端（[）を解析します。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>配列の始端ならば真。</returns>
-        Private Function IsArrayOpen(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                Return (u8c.Value.Raw0 = &H5B)
-            End If
-            Return False
-        End Function
-
-        ''' <summary>引数で指定されたU8Stringから、配列の終端（]）を解析します。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>配列の終端ならば真。</returns>
-        Private Function IsArrayClose(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                Return (u8c.Value.Raw0 = &H5D)
-            End If
-            Return False
         End Function
 
         ''' <summary>
@@ -2955,7 +2607,7 @@ Namespace Toml
             ParseWsCommentNewline(source, iter)
 
             ' カンマが来た場合は次の値を解析
-            If IsArraySep(iter.Current) Then
+            If EqualCharByte(iter.Current, &H2C) Then
                 iter.MoveNext()
 
                 ' 次の値を再帰的に解析
@@ -2964,16 +2616,6 @@ Namespace Toml
 
             ' 配列の値をすべて解析した後、配列の値の式を作成
             Return New TomlExpression(TomlExpressionType.ArrayValues, U8String.NewSlice(source, startIndex, iter.CurrentIndex - startIndex))
-        End Function
-
-        ''' <summary>引数で指定されたU8Stringから、配列の区切り文字（,）を解析します。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>配列の区切り文字ならば真。</returns>
-        Private Function IsArraySep(u8c As U8Char?) As Boolean
-            If u8c.HasValue Then
-                Return (u8c.Value.Raw0 = &H2C)
-            End If
-            Return False
         End Function
 
         ''' <summary>
@@ -2992,7 +2634,7 @@ Namespace Toml
 
             While iter.HasNext()
                 Dim midIndex = iter.CurrentIndex
-                If IsWschar(iter.Current) Then
+                If AnyCharByte(iter.Current, &H20, &H9) Then
                     ' 空白文字を読み捨て
                     iter.MoveNext()
                     Continue While
@@ -3065,9 +2707,11 @@ Namespace Toml
         ''' <remarks>
         ''' 標準テーブルは、[と]で囲まれた名前空間を持つテーブルです。
         ''' </remarks>
-        Function ParseStdTable(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
+        Private Function ParseStdTable(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
             Dim startIndex = iter.CurrentIndex
-            If MatchStdTableOpen(iter) Then
+
+            ' 標準テーブルの開始を確認 [
+            If MatchOneCharAndLastSkipWs(iter, &H5B) Then
                 ' キーを解析
                 Dim key = ParseKey(source, iter)
                 If key.Type = TomlExpressionType.None Then
@@ -3076,8 +2720,8 @@ Namespace Toml
                     Throw New TomlParseException("テーブルのキーが正しく解析できませんでした。", source, iter)
                 End If
 
-                ' テーブルの終了を確認
-                If MatchStdTableClose(iter) Then
+                ' テーブルの終了を確認 ]
+                If MatchOneCharAndPrevSkipWs(iter, &H5D) Then
                     Return New TomlExpression(TomlExpressionType.Table, U8String.NewSlice(source, startIndex, iter.CurrentIndex - startIndex), New TomlExpression() {key})
                 Else
                     iter.SetCurrentIndex(startIndex)
@@ -3088,49 +2732,6 @@ Namespace Toml
             ' テーブルの開始がない場合は空の式を返す
             iter.SetCurrentIndex(startIndex)
             Return TomlExpression.Empty
-        End Function
-
-        ''' <summary>
-        ''' 引数で指定されたU8Stringから、標準テーブルを解析します。
-        ''' 標準テーブルは、[table] の形式で表されます。
-        ''' </summary>
-        ''' <param name="source">解析対象のU8String。</param>
-        ''' <param name="iter">U8Stringのイテレータ。</param>
-        ''' <returns>標準テーブルの開始ならば真。</returns>
-        Private Function MatchStdTableOpen(iter As U8String.U8StringIterator) As Boolean
-            Dim startIndex = iter.CurrentIndex
-            If iter.MoveNext?.Raw0 = &H5B Then
-                ' 空白文字を読み捨て
-                MatchWs(iter)
-
-                Return True
-            Else
-                ' 配列テーブルの開始が正しく解析できなかった場合は偽
-                iter.SetCurrentIndex(startIndex)
-                Return False
-            End If
-        End Function
-
-        '''' <summary>
-        ''' 引数で指定されたU8Stringから、標準テーブルを解析します。
-        ''' 標準テーブルは、[table] の形式で表されます。
-        ''' </summary>
-        ''' <param name="source">解析対象のU8String。</param>
-        ''' <param name="iter">U8Stringのイテレータ。</param>
-        ''' <returns>標準テーブルの終了ならば真。</returns>
-        Private Function MatchStdTableClose(iter As U8String.U8StringIterator) As Boolean
-            Dim startIndex = iter.CurrentIndex
-
-            ' 空白文字を読み捨て
-            MatchWs(iter)
-
-            If iter.MoveNext?.Raw0 = &H5D Then
-                Return True
-            Else
-                ' 標準テーブルの終了が正しく解析できなかった場合は偽
-                iter.SetCurrentIndex(startIndex)
-                Return False
-            End If
         End Function
 
         '------------------------------
@@ -3148,13 +2749,15 @@ Namespace Toml
         ''' </remarks>
         Function ParseInlineTable(source As U8String, iter As U8String.U8StringIterator) As TomlExpression
             Dim startIndex = iter.CurrentIndex
-            If MatchlineTableOpen(iter) Then
+
+            ' インラインテーブルの開始を確認 {
+            If MatchOneCharAndLastSkipWs(iter, &H7B) Then
                 ' キー、値を解析
                 Dim expressions As New List(Of TomlExpression)()
                 ParseInlineTableKeyVals(source, iter, expressions)
 
-                ' インラインテーブルの終了を確認
-                If MatchlineTableClose(iter) Then
+                ' インラインテーブルの終了を確認 }
+                If MatchOneCharAndPrevSkipWs(iter, &H7D) Then
                     Return New TomlExpression(TomlExpressionType.InlineTable, U8String.NewSlice(source, startIndex, iter.CurrentIndex - startIndex), expressions.ToArray())
                 Else
                     iter.SetCurrentIndex(startIndex)
@@ -3167,47 +2770,6 @@ Namespace Toml
             Return TomlExpression.Empty
         End Function
 
-        ''' <summary>
-        ''' 引数で指定されたU8Stringのイテレータから、インラインテーブルの開始を確認します。
-        ''' インラインテーブルは、{で開始します。
-        ''' </summary>
-        ''' <param name="iter">U8Stringのイテレータ。</param>
-        ''' <returns>インラインテーブルの開始が正しく解析できた場合は真、それ以外は偽。</returns>
-        Private Function MatchlineTableOpen(iter As U8String.U8StringIterator) As Boolean
-            Dim startIndex = iter.CurrentIndex
-            If iter.MoveNext?.Raw0 = &H7B Then
-                ' 空白文字を読み捨て
-                MatchWs(iter)
-
-                Return True
-            Else
-                ' 配列テーブルの開始が正しく解析できなかった場合は偽
-                iter.SetCurrentIndex(startIndex)
-                Return False
-            End If
-        End Function
-
-        ''' <summary>
-        ''' 引数で指定されたU8Stringのイテレータから、インラインテーブルの終了を確認します。
-        ''' インラインテーブルは、}で終了します。
-        ''' </summary>
-        ''' <param name="iter">U8Stringのイテレータ。</param>
-        ''' <returns>インラインテーブルの終了が正しく解析できた場合は真、それ以外は偽。</returns>
-        Private Function MatchlineTableClose(iter As U8String.U8StringIterator) As Boolean
-            Dim startIndex = iter.CurrentIndex
-
-            ' 空白文字を読み捨て
-            MatchWs(iter)
-
-            If iter.MoveNext?.Raw0 = &H7D Then ' }
-                Return True
-            Else
-                ' 配列テーブルの終了が正しく解析できなかった場合は偽
-                iter.SetCurrentIndex(startIndex)
-                Return False
-            End If
-        End Function
-
         ''' <summary>引数で指定されたU8Stringのイテレータから、インラインテーブルのキーと値の区切り文字（,）を解析します。</summary>
         ''' <param name="iter">U8Stringのイテレータ。</param>
         ''' <returns>区切り文字が見つかった場合は真、それ以外は偽。</returns>
@@ -3218,7 +2780,7 @@ Namespace Toml
             MatchWs(iter)
 
             ' 区切り文字（,）をチェック
-            Dim res = iter.Current?.Raw0 = &H2C ' ,
+            Dim res = EqualCharByte(iter.Current, &H2C)
             iter.MoveNext()
 
             ' 空白文字を読み捨て
@@ -3343,29 +2905,61 @@ Namespace Toml
 
 #End Region
 
-#Region "標準要素"
+#Region "標準要素と共通処理"
+
+        ''' <summary>
+        ''' 引数のU8Charが指定されたバイト値と一致するかどうかをチェックします。
+        ''' 一致する場合は真を返します。
+        ''' </summary>
+        ''' <param name="u8c">U8Char。</param>
+        ''' <param name="charByte">対象のバイト値。</param>
+        ''' <returns>対象のバイト値と一致する場合は真。</returns>
+        Private Function EqualCharByte(u8c As U8Char?, charByte As Byte) As Boolean
+            If u8c.HasValue Then
+                Return (u8c.Value.Raw0 = charByte)
+            End If
+            Return False
+        End Function
+
+        ''' <summary>
+        ''' 引数のU8Charが指定されたバイト範囲内にあるかどうかをチェックします。
+        ''' 範囲はlowByteからhiByteまでです。
+        ''' </summary>
+        ''' <param name="u8c">U8Char。</param>
+        ''' <param name="lowByte">範囲の下限バイト値。</param>
+        ''' <param name="hiByte">範囲の上限バイト値。</param>
+        ''' <returns>範囲内にある場合は真、それ以外は偽。</returns>
+        Private Function RangeCharByte(u8c As U8Char?, lowByte As Byte, hiByte As Byte) As Boolean
+            If u8c.HasValue Then
+                Return u8c.Value.Raw0 >= lowByte AndAlso u8c.Value.Raw0 <= hiByte
+            End If
+            Return False
+        End Function
+
+        ''' <summary>
+        ''' 引数のU8Charが指定されたバイト値のいずれかと一致するかどうかをチェックします。
+        ''' 一致する場合は真を返します。
+        ''' </summary>
+        ''' <param name="u8c">U8Char。</param>
+        ''' <param name="tarByte">対象のバイト値の配列。</param>
+        ''' <returns>対象のバイト値のいずれかと一致する場合は真、それ以外は偽。</returns>
+        Private Function AnyCharByte(u8c As U8Char?, ParamArray tarByte() As Byte) As Boolean
+            If u8c.HasValue Then
+                For b As Integer = 0 To tarByte.Length - 1
+                    If u8c.Value.Raw0 = tarByte(b) Then
+                        Return True
+                    End If
+                Next
+            End If
+            Return False
+        End Function
 
         ''' <summary>アルファベット文字（a-z, A-Z）をチェックします。</summary>
         ''' <param name="u8c">U8Char。</param>
         ''' <returns>アルファベット文字の場合はTrue、それ以外はFalse。</returns>
         Private Function IsAlpha(u8c As U8Char?) As Boolean
             ' アルファベット文字（a-z, A-Z）をチェック
-            If u8c.HasValue Then
-                Return (u8c.Value.Raw0 >= &H41 AndAlso u8c.Value.Raw0 <= &H5A) OrElse
-                       (u8c.Value.Raw0 >= &H61 AndAlso u8c.Value.Raw0 <= &H7A)
-            End If
-            Return False
-        End Function
-
-        ''' <summary>数字（0-9）をチェックします。</summary>
-        ''' <param name="u8c">U8Char。</param>
-        ''' <returns>数字の場合はTrue、それ以外はFalse。</returns>
-        Private Function IsDigit(u8c As U8Char?) As Boolean
-            ' 数字文字（0-9）をチェック
-            If u8c.HasValue Then
-                Return u8c.Value.Raw0 >= &H30 AndAlso u8c.Value.Raw0 <= &H39
-            End If
-            Return False
+            Return RangeCharByte(u8c, &H41, &H5A) OrElse RangeCharByte(u8c, &H61, &H7A)
         End Function
 
         ''' <summary>16進数文字（0-9, A-F, a-f）をチェックします。</summary>
@@ -3373,12 +2967,9 @@ Namespace Toml
         ''' <returns>16進数文字の場合はTrue、それ以外はFalse。</returns>
         Private Function IsHexdig(u8c As U8Char?) As Boolean
             ' 16進数文字（0-9, A-F）をチェック
-            If u8c.HasValue Then
-                Return IsDigit(u8c) OrElse
-                       (u8c.Value.Raw0 >= &H41 AndAlso u8c.Value.Raw0 <= &H46) OrElse
-                       (u8c.Value.Raw0 >= &H61 AndAlso u8c.Value.Raw0 <= &H66)
-            End If
-            Return False
+            Return RangeCharByte(u8c, &H30, &H39) OrElse ' 0-9の範囲
+                   RangeCharByte(u8c, &H41, &H46) OrElse ' A-Fの範囲
+                   RangeCharByte(u8c, &H61, &H66) ' a-fの範囲
         End Function
 
         ''' <summary>指定回数の 数字文字かチェックします。</summary>
@@ -3387,7 +2978,7 @@ Namespace Toml
         ''' <returns>指定回数の数字文字の場合はTrue、それ以外はFalse。</returns>
         Private Function MatchDigitTimes(iter As U8String.U8StringIterator, count As Integer) As Boolean
             For i As Integer = 0 To count - 1
-                If Not IsDigit(iter.Current) Then
+                If Not RangeCharByte(iter.Current, &H30, &H39) Then ' 0-9の範囲
                     Return False
                 End If
                 iter.MoveNext()
@@ -3406,6 +2997,163 @@ Namespace Toml
                 End If
                 iter.MoveNext()
             Next
+            Return True
+        End Function
+
+        ''' <summary>
+        ''' 引数で指定されたU8Stringのイテレータから空白を読み捨ててから
+        ''' 対象文字かどうかをチェックし、対象文字ならば真を返します。
+        ''' 対象文字でなければイテレータの位置を戻して偽を返します。
+        ''' </summary>
+        ''' <param name="iter">U8Stringのイテレータ。</param>
+        ''' <param name="charByte">対象文字。</param>
+        ''' <returns>対象文字ならば真。</returns>
+        Private Function MatchOneCharAndPrevSkipWs(iter As U8String.U8StringIterator, charByte As Byte) As Boolean
+            Dim startIndex = iter.CurrentIndex
+
+            ' 空白文字を読み捨て
+            MatchWs(iter)
+
+            ' 対象文字なら真
+            If iter.MoveNext?.Raw0 = charByte Then
+                Return True
+            Else
+                ' 対象文字が来なかった場合はイテレータの位置を戻して偽
+                iter.SetCurrentIndex(startIndex)
+                Return False
+            End If
+        End Function
+
+        ''' <summary>
+        ''' 引数で指定されたU8Stringのイテレータから対象文字かどうかをチェックし、
+        ''' 対象文字ならば空白文字を読み捨てて真を返します。
+        ''' 対象文字でなければイテレータの位置を戻して偽を返します。
+        ''' </summary>
+        ''' <param name="iter">U8Stringのイテレータ。</param>
+        ''' <param name="charByte">対象文字。</param>
+        ''' <returns>対象文字ならば真。</returns>
+        Private Function MatchOneCharAndLastSkipWs(iter As U8String.U8StringIterator, charByte As Byte) As Boolean
+            Dim startIndex = iter.CurrentIndex
+
+            ' 対象文字なら空白文字を読み捨てて真
+            If iter.MoveNext?.Raw0 = charByte Then
+                ' 空白文字を読み捨て
+                MatchWs(iter)
+                Return True
+            Else
+                ' 対象文字が来なかった場合はイテレータの位置を戻して偽
+                iter.SetCurrentIndex(startIndex)
+                Return False
+            End If
+        End Function
+
+        ''' <summary>
+        ''' 16進数文字を数値に変換します。
+        ''' 引数のバイトは、ASCIIコードの16進数文字（0-9, A-F, a-f）である必要があります。
+        ''' それ以外の文字が来た場合は例外をスローします。
+        ''' </summary>
+        ''' <param name="srcByte">変換する文字。</param>
+        ''' <returns>変換した値。</returns>
+        Private Function ToByteHex(srcByte As Byte) As Byte
+            If srcByte >= &H30 AndAlso srcByte <= &H39 Then
+                Return CByte(srcByte - &H30) ' 0-9
+            ElseIf srcByte >= &H41 AndAlso srcByte <= &H46 Then
+                Return CByte(srcByte - &H41 + 10) ' A-F
+            ElseIf srcByte >= &H61 AndAlso srcByte <= &H66 Then
+                Return CByte(srcByte - &H61 + 10) ' a-f
+            End If
+            Throw New TomlParseException("無効な16進数文字です。")
+        End Function
+
+        ''' <summary>U8StringのイテレータからUTF-8の文字を取得し、バイト領域に追加します。</summary>
+        ''' <param name="buf">バイト列を格納するリスト。</param>
+        ''' <param name="iter">U8Stringのイテレータ。</param>
+        ''' <param name="times">追加する16進数の文字数。</param>
+        Private Sub AddHexIter(buf As List(Of Byte), iter As U8String.U8StringIterator, times As Integer)
+            Dim b As Byte = 0
+            For i As Integer = 0 To times - 1
+                b = (b << 4) Or ToByteHex(iter.Current.Value.Raw0)
+                iter.MoveNext()
+                If (i And 1) <> 0 Then
+                    If b <> 0 Then
+                        buf.Add(b)
+                    End If
+                    b = 0
+                End If
+            Next
+        End Sub
+
+        ''' <summary>
+        ''' バイトバッファにU8Charを追加します。
+        ''' U8CharはUTF-8の文字を表し、1〜4バイトで構成されます。
+        ''' </summary>
+        ''' <param name="buf">バイトバッファ。</param>
+        ''' <param name="u8c">追加する文字。</param>
+        <Extension()>
+        Private Sub AppendU8Char(buf As List(Of Byte), u8c As U8Char)
+            ' U8Charをバイト列に追加
+            Select Case u8c.Size
+                Case 1
+                    buf.Add(u8c.Raw0)
+                Case 2
+                    buf.Add(u8c.Raw0)
+                    buf.Add(u8c.Raw1)
+                Case 3
+                    buf.Add(u8c.Raw0)
+                    buf.Add(u8c.Raw1)
+                    buf.Add(u8c.Raw2)
+                Case 4
+                    buf.Add(u8c.Raw0)
+                    buf.Add(u8c.Raw1)
+                    buf.Add(u8c.Raw2)
+                    buf.Add(u8c.Raw3)
+            End Select
+        End Sub
+
+        ''' <summary>U8StringのイテレータからUTF-8の文字を取得し、バイト領域に追加します。</summary>
+        ''' <param name="buf">バイト列を格納するリスト。</param>
+        ''' <param name="iter">U8Stringのイテレータ。</param>
+        <Extension()>
+        Private Sub AppendEscapeBytes(buf As List(Of Byte), iter As U8String.U8StringIterator)
+            Dim nc = iter.MoveNext()
+            Select Case nc.Value.Raw0
+                Case &H22, &H5C
+                    buf.Add(nc.Value.Raw0)
+                Case &H62
+                    buf.Add(&H8)
+                Case &H66
+                    buf.Add(&HC)
+                Case &H6E
+                    buf.Add(&HA)
+                Case &H72
+                    buf.Add(&HD)
+                Case &H74
+                    buf.Add(&H9)
+                Case &H75
+                    AddHexIter(buf, iter, 4)
+                Case &H55
+                    AddHexIter(buf, iter, 8)
+                Case Else
+                    Throw New TomlParseException("無効なエスケープシーケンスです。")
+            End Select
+        End Sub
+
+        ''' <summary>引数で指定されたU8Stringのイテレータから、数値の符号がプラスかどうかを読み取ります。</summary>
+        ''' <param name="iter">U8Stringのイテレータ。</param>
+        ''' <returns>符号がプラスの場合は真、それ以外は偽。</returns>
+        Private Function ReadNumberSignIsPlus(iter As U8String.U8StringIterator) As Boolean
+            ' 符号がプラス（+）かマイナス（-）かをチェック
+            If iter.Current.HasValue Then
+                If iter.Current.Value.Raw0 = &H2D Then
+                    iter.MoveNext()
+                    Return False
+                ElseIf iter.Current.Value.Raw0 = &H2B Then
+                    iter.MoveNext()
+                    Return True
+                End If
+            End If
+
+            ' +、-以外は正の数値とする
             Return True
         End Function
 

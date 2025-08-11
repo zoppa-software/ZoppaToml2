@@ -5,12 +5,31 @@ Imports ZoppaTomlLibrary.Strings
 
 Namespace Toml
 
+    ''' <summary>
+    ''' TOMLドキュメントを表すクラス。
+    ''' 
+    ''' このクラスは、TOMLドキュメント全体を表し、キーと値のペアを管理します。
+    ''' </summary>
+    ''' <remarks>
+    ''' TOMLドキュメントは、キーと値のペア、テーブル、配列テーブルなどを含むことができます。
+    ''' このクラスは、TOML式を解析してドキュメントを構築します。
+    ''' </remarks>
     Public NotInheritable Class TomlDocument
         Inherits TomlNode
 
-        Public Sub New(rootExpr As TomlExpression)
+        ''' <summary>
+        ''' TOMLドキュメントのコンストラクタ。
+        ''' 
+        ''' このコンストラクタは、TOML式を受け取り、ドキュメントを初期化します。
+        ''' </summary>
+        ''' <param name="rootExpr">TOML式。</param>
+        ''' <remarks>
+        ''' このコンストラクタは、TOML式の内容を解析し、キーと値のペアを登録します。
+        ''' </remarks>
+        Private Sub New(rootExpr As TomlExpression)
             MyBase.New(TomlNodeType.Keyvals)
 
+            ' 親のテーブルノードを設定
             Dim parentNode As TomlElement = Me
 
             For Each kvp In rootExpr.Contents
@@ -64,6 +83,14 @@ Namespace Toml
             Return New TomlDocument(rootExpr)
         End Function
 
+        ''' <summary>
+        ''' ファイルからTOMLドキュメントを読み取ります。
+        ''' 
+        ''' このメソッドは、指定されたファイルパスからTOMLドキュメントを読み取り、返します。
+        ''' ファイルはUTF-8でエンコードされている必要があります。
+        ''' </summary>
+        ''' <param name="docPath">TOMLドキュメントのファイルパス。</param>
+        ''' <returns>TOMLドキュメント。</returns>
         Public Shared Function ReadFromFile(docPath As String) As TomlDocument
             Dim path As New IO.FileInfo(docPath)
             If path.Exists Then

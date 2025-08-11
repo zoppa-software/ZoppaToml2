@@ -3,8 +3,6 @@ Imports ZoppaTomlLibrary.Toml
 
 Module Program
     Sub Main(args As String())
-        Threading.Thread.Sleep(5000) ' Allow time for the console to initialize
-
         Dim doc = TomlDocument.ReadFromFile("example.toml")
 
         Console.WriteLine("title : {0}", doc("title").ValueTo(Of String)())
